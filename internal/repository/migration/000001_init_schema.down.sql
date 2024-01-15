@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS saved_papers;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS papers;

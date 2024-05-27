@@ -41,9 +41,27 @@ func NewPaperHandler(paperService service.PaperService, manager *jwt.JWTManager)
 }
 
 func (h *PaperHandler) SearchPaper(c *fiber.Ctx) error {
+	params, err := GetRequestSearchParams(c)
+	if err != nil {
+		return err
+	}
+	searchResults, err := h.paperService.Search(c.Context(), params)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, ErrSearchError.Error())
+	}
+
+	err = h.UpdateSavedField(c, searchResults)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.Status(fiber.StatusOK).JSON(models.SearchPapersResponse{ScoredPapers: searchResults})
+}
+
+func GetRequestSearchParams(c *fiber.Ctx) (models.SearchPaperRequest, error) {
 	query := c.Query("query")
 	if query == "" {
-		return fiber.NewError(fiber.StatusBadRequest, ErrEmptySearchQuery.Error())
+		return models.SearchPaperRequest{}, fiber.NewError(fiber.StatusBadRequest, ErrEmptySearchQuery.Error())
 	}
 
 	queryYear := c.Query("year")
@@ -52,11 +70,11 @@ func (h *PaperHandler) SearchPaper(c *fiber.Ctx) error {
 	if queryYear != "" {
 		convertedYear, err := strconv.Atoi(queryYear)
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, ErrInvalidYear.Error())
+			return models.SearchPaperRequest{}, fiber.NewError(fiber.StatusBadRequest, ErrInvalidYear.Error())
 		}
 
 		if !isValidYear(convertedYear) {
-			return fiber.NewError(fiber.StatusBadRequest, ErrInvalidYear.Error())
+			return models.SearchPaperRequest{}, fiber.NewError(fiber.StatusBadRequest, ErrInvalidYear.Error())
 		}
 
 		year = convertedYear
@@ -67,10 +85,72 @@ func (h *PaperHandler) SearchPaper(c *fiber.Ctx) error {
 	if queryAmount != "" {
 		convertedAmount, err := strconv.Atoi(queryAmount)
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, ErrInvalidAmountFormat.Error())
+			return models.SearchPaperRequest{}, fiber.NewError(fiber.StatusBadRequest, ErrInvalidAmountFormat.Error())
 		}
 		if convertedAmount > 120 || convertedAmount < 1 {
-			return fiber.NewError(fiber.StatusBadRequest, ErrInvalidAmount.Error())
+			return models.SearchPaperRequest{}, fiber.NewError(fiber.StatusBadRequest, ErrInvalidAmount.Error())
+		}
+		amount = convertedAmount
+	}
+
+	category := c.Query("category")
+
+	return models.SearchPaperRequest{
+		Query:    query,
+		Category: category,
+		Year:     year,
+		Amount:   amount,
+	}, nil
+}
+
+func (h *PaperHandler) UpdateSavedField(c *fiber.Ctx, papers []models.ScoredPaper) error {
+	authHeader := c.Get("Authorization")
+	if authHeader != "" {
+		claims, err := middleware.AuthHeaderValidation(authHeader, h.Manager)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+
+		err = h.paperService.UpdateSavedField(c.Context(), claims.ID, papers)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+	}
+
+	return nil
+}
+
+func (h *PaperHandler) SearchScoredPapers(c *fiber.Ctx) ([]models.ScoredPaper, error) {
+	query := c.Query("query")
+	if query == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, ErrEmptySearchQuery.Error())
+	}
+
+	queryYear := c.Query("year")
+	year := 0
+
+	if queryYear != "" {
+		convertedYear, err := strconv.Atoi(queryYear)
+		if err != nil {
+			return nil, fiber.NewError(fiber.StatusBadRequest, ErrInvalidYear.Error())
+		}
+
+		if !isValidYear(convertedYear) {
+			return nil, fiber.NewError(fiber.StatusBadRequest, ErrInvalidYear.Error())
+		}
+
+		year = convertedYear
+	}
+
+	amount := 0
+	queryAmount := c.Query("amount")
+	if queryAmount != "" {
+		convertedAmount, err := strconv.Atoi(queryAmount)
+		if err != nil {
+			return nil, fiber.NewError(fiber.StatusBadRequest, ErrInvalidAmountFormat.Error())
+		}
+		if convertedAmount > 120 || convertedAmount < 1 {
+			return nil, fiber.NewError(fiber.StatusBadRequest, ErrInvalidAmount.Error())
 		}
 		amount = convertedAmount
 	}
@@ -83,23 +163,10 @@ func (h *PaperHandler) SearchPaper(c *fiber.Ctx) error {
 		Amount:   amount,
 	})
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, ErrSearchError.Error())
+		return nil, fiber.NewError(fiber.StatusInternalServerError, ErrSearchError.Error())
 	}
 
-	authHeader := c.Get("Authorization")
-	if authHeader != "" {
-		claims, err := middleware.AuthHeaderValidation(authHeader, h.Manager)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-
-		err = h.paperService.UpdateSavedField(c.Context(), claims.ID, searchResults)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-	}
-
-	return c.Status(fiber.StatusOK).JSON(models.SearchPapersResponse{ScoredPapers: searchResults})
+	return searchResults, nil
 }
 
 func isValidYear(year int) bool {
